@@ -58,10 +58,13 @@ INSERT INTO crypto.MetricType (name, accessKey, createdAt, updatedAt)
     VALUES ('percentChange','["result"]["price"]["change"]["percentage"]', now(), now());
 
 INSERT INTO crypto.MetricType (name, accessKey, createdAt, updatedAt)
-    VALUES ('absoluteChange ','["result"]["price"]["change"]["absolute"]', now(), now());
+    VALUES ('absoluteChange','["result"]["price"]["change"]["absolute"]', now(), now());
 
 INSERT INTO crypto.MetricType (name, accessKey, createdAt, updatedAt)
-    VALUES ('volume ','["result"]["volume"]', now(), now());
+    VALUES ('volume','["result"]["volume"]', now(), now());
 
 INSERT INTO crypto.MetricType (name, accessKey, createdAt, updatedAt)
-    VALUES ('quoteVolume ','["result"]["volumeQuote"]', now(), now());
+    VALUES ('quoteVolume','["result"]["volumeQuote"]', now(), now());
+
+INSERT INTO `crypto`.`User` (`firstName`, `lastName`, `email`, `createdAt`, `updatedAt`)
+    VALUES ('Donny', 'Flynn', 'donny@pivasc.com', now(), now());

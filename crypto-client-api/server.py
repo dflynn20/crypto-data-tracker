@@ -2,7 +2,7 @@ from flask import Flask
 from flask import request
 from flask_cors import CORS
 from setup import init
-from middleware import validate_authorization
+from middleware import validateAuthorization, checkParams
 from healthcheck import HealthCheck, EnvironmentDump
 import numpy as np
 from pymysqlpool.pool import Pool
@@ -35,7 +35,7 @@ SQL_PASSWORD=os.environ.get('SQL_PASSWORD')
 SQL_SCHEMA=os.environ.get('SQL_SCHEMA')
 MAX_POOL_SIZE=os.environ.get('MAX_POOL_SIZE')
 MIN_POOL_SIZE=os.environ.get('MIN_POOL_SIZE')
-pool = Pool(host=SQL_IP, user=SQL_USER, password=SQL_PASSWORD, db=SQL_SCHEMA, autocommit=True, min_size=MIN_POOL_SIZE, max_size=MAX_POOL_SIZE)
+pool = Pool(host=SQL_IP, user=SQL_USER, password=SQL_PASSWORD, db=SQL_SCHEMA, autocommit=True, min_size=int(MIN_POOL_SIZE), max_size=int(MAX_POOL_SIZE))
 pool.init()
 print("Pool initialized")
 
@@ -62,17 +62,19 @@ def returnErrorReleaseSQL(pool, db, errorMessage):
     pool.release(db)
     return json.dumps({"code":400, "msg": errorMessage}), 400
 
-# This code assumes
+# This adds the specified metric, pair, and market to be tracked for the user.
 def addToDataBaseForTracking(userId, market, pair, metric):
     if userId < 1:
         return json.dumps({"code":400, "msg": "Invalid UserId"}), 400
     else:
         db, cursor, pool = connectToMySQL()
-        userValidatingQuery = f"SELECT * FROM crypto.User WHERE id = {userId};"
+        userValidatingQuery = f"SELECT * FROM crypto.User WHERE deletedAt is null AND id = {userId};"
+        # print(userValidatingQuery)
         cursor.execute(userValidatingQuery)
         if len(cursor.fetchall()) < 1:
             return returnErrorReleaseSQL(pool, db, "Invalid UserId")
-        metricValidatingQuery = f"SELECT deletedAt, id FROM crypto.MetricType WHERE name = {metric};"
+        metricValidatingQuery = f"SELECT mt.deletedAt, mt.id FROM crypto.MetricType mt WHERE mt.deletedAt is null AND mt.name = '{metric}';"
+        # print(metricValidatingQuery)
         cursor.execute(metricValidatingQuery)
         metricData = cursor.fetchall()
         if len(metricData) < 1:
@@ -86,25 +88,31 @@ def addToDataBaseForTracking(userId, market, pair, metric):
 
         # Counter is for Debugging
         try:
+            failed = False
+            shortCircuit = False
             counter = 0
             # Step 0
             firstCheck = f"""
-            SELECT cpm.id, CASE WHEN ucpm.userId = {userId} then 1 else 0 end as alreadyTracking
+            SELECT cpm.id, CASE WHEN ucpm.userId = {userId} THEN 1 ELSE 0 END as alreadyTracking
             FROM crypto.UserCurrencyPairMetric ucpm JOIN crypto.CurrencyPairMetric cpm
             ON ucpm.currencyPairMetricId = cpm.id
             WHERE ucpm.deletedAt is null
-            AND cpm.market = {market}
-            AND cpm.pair = {pair}
+            AND cpm.market = '{market}'
+            AND cpm.pair = '{pair}'
             AND cpm.metricTypeId = {metricTypeId}
             ORDER BY 2 DESC
             LIMIT 1
             """
+            print(firstCheck)
             cursor.execute(firstCheck)
             pairMetricData = cursor.fetchall()
+            print(pairMetricData)
+
             counter += 1
             if len(pairMetricData) < 1:
                 # Step 1
-                insertionPairMetric = f"INSERT INTO crypto.CurrencyPairMetric (market, pair, metricTypeId) VALUES  ({market}, {pair}, {metricTypeId}) "
+                insertionPairMetric = f"INSERT INTO crypto.CurrencyPairMetric (market, pair, metricTypeId) VALUES  ('{market}', '{pair}', {metricTypeId});"
+                print(insertionPairMetric)
                 cursor.execute(insertionPairMetric)
                 currencyPairMetricId = cursor.lastrowid
                 counter += 1
@@ -113,17 +121,20 @@ def addToDataBaseForTracking(userId, market, pair, metric):
                 currencyPairMetricId = pairMetricData[0]['id']
                 alreadyTracking = pairMetricData[0]['alreadyTracking']
                 if alreadyTracking == 1:
-                    pool.release(db)
-                    return json.dumps({"code":200, "msg": "User already tracking that metric"}), 200
+                    shortCircuit = True
+                    return
                 counter += 2
                 # Step 3 declares currencyPairMetricId via first row
             userMetricRelationship = f"INSERT INTO crypto.UserCurrencyPairMetric (userId, currencyPairMetricId, createdAt) VALUES ({userId},{currencyPairMetricId}, now())"
             cursor.execute(userMetricRelationship)
         except:
             print(f"Error occurred during step: {counter}")
+            failed = True
             pass
         finally:
             pool.release(db)
+            if shortCircuit: return json.dumps({"code":200, "msg": "User already tracking that metric"}), 200
+            if failed: return json.dumps({"code":400, "msg": f"Something went wrong {metric} for {pair} on {market} for this user."}), 400
             return json.dumps({"code":201, "msg": f"Successfully Added {metric} for {pair} on {market} for this user."}), 201
 
 
@@ -131,8 +142,8 @@ def addToDataBaseForTracking(userId, market, pair, metric):
 def addTrackingMetric():
     if validateAuthorization(request):
         data = request.json
-        errorMessage, userId, market, pair, metric = check_params(data)
-        if len(errorString) > 0:
+        errorMessage, userId, market, pair, metric = checkParams(data)
+        if len(errorMessage) > 0:
             return json.dumps({"code":400, "msg": errorMessage}), 400
         else:
             return addToDataBaseForTracking(userId, market, pair, metric)
