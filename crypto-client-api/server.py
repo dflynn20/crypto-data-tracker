@@ -159,24 +159,37 @@ def getRank(cursor, currencyPairMetricId, metricTypeId, market):
     rankDenom = rowNum
     return rankNum, rankDenom
 
-# This function takes in a cursor object as well as the currencyPairMetricId.
-# It returns two arrays:
-# X Array of the times that the metric was taken.
-# Y Array of the value of that metric at the corresponding times.
-def getGraphData(cursor, currencyPairMetricId):
+# This function takes in a cursor object as well as the currencyPairMetricIds.
+# It returns a Dictionary of Dictionaries.
+# The key to the first level is the index for the allMetricData array corresponding to that
+# specific CurrencyPairMetric. The Value is a Dictionary with the keys being:
+# "times": X Array of the times that the metric was taken
+# "values": Y Array of the value of that metric at the corresponding times
+# such that the frontend can graph this data.
+def getGraphData(cursor, allUserCurrencyPairMetrics, indexDict):
     graphQuery = f"""
-    SELECT queriedAt, value
-    FROM
-    crypto.MetricValue
-    ORDER BY 1 ASC
+    SELECT queriedAt, value, currencyPairMetricId
+    FROM crypto.MetricValue
+    WHERE currencyPairMetricId in
+    {tuple(allUserCurrencyPairMetrics)}
+    ORDER BY 3, 1 ASC
     """
     cursor.execute(graphQuery)
     graphData = cursor.fetchall()
-    xAr, yAr = [], []
+    resultsDict = {}
+    # Taking advantage of the SQL Ordering
+    prevId, xAr, yAr = 0, [], []
     for row in graphData:
+        currId = row['currencyPairMetricId']
+        if prevId > 0 and currId != prevId:
+            resultsDict[indexDict[prevId]] = {'times': xAr, 'values': yAr}
+            xAr, yAr = [], []
+        prevId = currId
         xAr.append(row['queriedAt'])
         yAr.append(row['value'])
-    return xAr, yAr
+    # Still have to add the last one as the trigger condition would not have gone
+    resultsDict[indexDict[prevId]] = {'times': xAr, 'values': yAr}
+    return resultsDict
 
 def getMetricsUserIsTracking(userId):
     error = False
@@ -196,14 +209,22 @@ def getMetricsUserIsTracking(userId):
     metricData = cursor.fetchall()
     allMetricData = []
     try:
+        allUserCurrencyPairMetrics, indexDict, index = [], {}, 0
         for row in metricData:
-            rankNum, rankDenom = getRank(cursor, row['id'], row['metricTypeId'], row['market'])
-        # Improvement would be to separate this step out from the loop such that all of a user's N metrics'
-        # graph data is returned in 1 query, not in N queries.
-            xAr, yAr = getGraphData(cursor, row['id'])
+            currencyPairMetricId = row['id']
+            allUserCurrencyPairMetrics.append(currencyPairMetricId)
+            indexDict[currencyPairMetricId] = index
+            rankNum, rankDenom = getRank(cursor, currencyPairMetricId, row['metricTypeId'], row['market'])
             rowDict = {'pair': row['pair'], 'market': row['market'], 'metric': row['metricName'],
-                        'rankNum': rankNum, 'rankDenom': rankDenom, 'times': xAr, 'values': yAr}
+                        'rankNum': rankNum, 'rankDenom': rankDenom, 'times': [], 'values': []}
             allMetricData.append(rowDict)
+            index += 1
+        # graphDataDict = {allMetricData_index : {"times": [queriedAt], "values": [value]}}
+        graphDataDict = getAllUserGraphData(cursor, allUserCurrencyPairMetrics, indexDict)
+        for k, v in graphDataDict.items():
+            allMetricData[k]['times'] = v['times']
+            allMetricData[k]['values'] = v['values']
+
     except:
         print(f"Error occurred {len(allMetricData)} / {len(metricData)} of the way through the loop.")
         error = True
