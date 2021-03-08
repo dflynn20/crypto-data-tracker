@@ -35,7 +35,6 @@ CREATE TABLE crypto.`CurrencyPairMetric` (
   `id` int auto_increment primary key,
   `pair` varchar(50) not null,
   `market` varchar(50) not null,
-  `numUsers` int not null,
   `metricTypeId` int not null
 );
 
