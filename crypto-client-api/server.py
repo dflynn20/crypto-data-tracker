@@ -68,21 +68,20 @@ def addToDataBaseForTracking(userId, market, pair, metric):
         return json.dumps({"code":400, "msg": "Invalid UserId"}), 400
     else:
         db, cursor, pool = connectToMySQL()
-        userValidatingQuery = f"SELECT * FROM crypto.User WHERE deletedAt is null AND id = {userId};"
-        # print(userValidatingQuery)
+        userValidatingQuery = f"SELECT id FROM crypto.User WHERE deletedAt is null AND id = {userId};"
         cursor.execute(userValidatingQuery)
         if len(cursor.fetchall()) < 1:
             return returnErrorReleaseSQL(pool, db, "Invalid UserId")
+
         metricValidatingQuery = f"SELECT mt.deletedAt, mt.id FROM crypto.MetricType mt WHERE mt.deletedAt is null AND mt.name = '{metric}';"
-        # print(metricValidatingQuery)
         cursor.execute(metricValidatingQuery)
         metricData = cursor.fetchall()
         if len(metricData) < 1:
             return returnErrorReleaseSQL(pool, db, "Invalid Metric")
         deletedAt, metricTypeId = metricData[0]['deletedAt'], metricData[0]['id']
-        print(deletedAt, metricTypeId)
         if deletedAt != None:
             return returnErrorReleaseSQL(pool, db, f"Metric was deleted at {deletedAt}")
+
         # TO DO
         # Add market and pair validation as well. I am assuming good behavior with these.
 
@@ -92,7 +91,7 @@ def addToDataBaseForTracking(userId, market, pair, metric):
             shortCircuit = False
             counter = 0
             # Step 0
-            firstCheck = f"""
+            check = f"""
             SELECT cpm.id, CASE WHEN ucpm.userId = {userId} THEN 1 ELSE 0 END as alreadyTracking
             FROM crypto.UserCurrencyPairMetric ucpm JOIN crypto.CurrencyPairMetric cpm
             ON ucpm.currencyPairMetricId = cpm.id
@@ -103,10 +102,8 @@ def addToDataBaseForTracking(userId, market, pair, metric):
             ORDER BY 2 DESC
             LIMIT 1
             """
-            print(firstCheck)
-            cursor.execute(firstCheck)
+            cursor.execute(check)
             pairMetricData = cursor.fetchall()
-            print(pairMetricData)
 
             counter += 1
             if len(pairMetricData) < 1:
@@ -138,6 +135,118 @@ def addToDataBaseForTracking(userId, market, pair, metric):
             return json.dumps({"code":201, "msg": f"Successfully Added {metric} for {pair} on {market} for this user."}), 201
 
 
+# This function returns the rank of the standard deviation using SQL
+# to compare to other metrics of that type, on that market that are being tracked.
+# It returns the numerator of the rank, and the denominator of the rank (being the total
+# of such metrics).
+def getRank(cursor, currencyPairMetricId, metricTypeId, market):
+    rankNum, rankDenom = 0, 0
+    rankQuery = f"""
+    SELECT std(mv.value), mv.id FROM
+    crypto.MetricValue mv JOIN
+    crypto.CurrencyPairMetric cpm
+    ON mv.currencyPairMetricId = cpm.id
+    WHERE cpm.metricTypeId = {metricTypeId}
+    AND cpm.market = '{market}'
+    GROUP BY 1 DESC
+    """
+    cursor.execute(rankQuery)
+    rankData = cursor.fetchall()
+    rowNum = 0
+    for row in rankData:
+        rowNum += 1
+        if row['id'] == currencyPairMetricId: rankNum = rowNum
+    rankDenom = rowNum
+    return rankNum, rankDenom
+
+# This function takes in a cursor object as well as the currencyPairMetricId.
+# It returns two arrays:
+# X Array of the times that the metric was taken.
+# Y Array of the value of that metric at the corresponding times.
+def getGraphData(cursor, currencyPairMetricId):
+    graphQuery = f"""
+    SELECT queriedAt, value
+    FROM
+    crypto.MetricValue
+    ORDER BY 1 ASC
+    """
+    cursor.execute(graphQuery)
+    graphData = cursor.fetchall()
+    xAr, yAr = [], []
+    for row in graphData:
+        xAr.append(row['queriedAt'])
+        yAr.append(row['value'])
+    return xAr, yAr
+
+def getMetricsUserIsTracking(userId):
+    error = False
+    db, cursor, pool = connectToMySQL()
+    getMetrics = f"""
+    SELECT cpm.*, mt.name as metricName
+    FROM crypto.CurrencyPairMetric cpm
+    JOIN crypto.MetricType mt on cpm.metricTypeId = mt.id
+    WHERE cpm.id IN
+    (
+    SELECT DISTINCT currencyPairMetricId
+    FROM UserCurrencyPairMetric
+    WHERE ucpm.deletedAt is null AND ucpm.userId = {userId}
+    )
+    """
+    cursor.execute(getMetrics)
+    metricData = cursor.fetchall()
+    allMetricData = []
+    try:
+        for row in metricData:
+            rankNum, rankDenom = getRank(cursor, row['id'], row['metricTypeId'], row['market'])
+        # Improvement would be to separate this step out from the loop such that all of a user's N metrics'
+        # graph data is returned in 1 query, not in N queries.
+            xAr, yAr = getGraphData(cursor, row['id'])
+            rowDict = {'pair': row['pair'], 'market': row['market'], 'metric': row['metricName'],
+                        'rankNum': rankNum, 'rankDenom': rankDenom, 'times': xAr, 'values': yAr}
+            allMetricData.append(rowDict)
+    except:
+        print(f"Error occurred {len(allMetricData)} / {len(metricData)} of the way through the loop.")
+        error = True
+        pass
+    finally:
+        pool.release(db)
+        if error:
+            json.dumps({"code":200, "successfullyFinished": False, "data": allMetricData}), 200
+        return json.dumps({"code":200, "successfullyFinished": True, "data": allMetricData}), 200
+
+# Properly handles when the User is not in the database as well as when the metric is not valid.
+# The query-cryptowatch script that queries will upkeep this by default if there is an API-side deletion of the metric,
+# it will automatically delete it from being tracked for all users.
+def safeRemoveFromDatabase(userId, market, pair, metric):
+    db, cursor, pool = connectToMySQL()
+    userValidatingQuery = f"SELECT id FROM crypto.User WHERE deletedAt is null AND id = {userId};"
+    cursor.execute(userValidatingQuery)
+    if len(cursor.fetchall()) < 1:
+        return returnErrorReleaseSQL(pool, db, "Invalid UserId")
+    metricValidatingQuery = f"SELECT mt.id FROM crypto.MetricType mt WHERE mt.deletedAt is null AND mt.name = '{metric}';"
+    cursor.execute(metricValidatingQuery)
+    metricData = cursor.fetchall()
+    if len(metricData) < 1:
+        return returnErrorReleaseSQL(pool, db, "Invalid Metric")
+    metricTypeId = metricData[0]['id']
+    check = f"""
+    SELECT ucpm.id
+    FROM crypto.UserCurrencyPairMetric ucpm JOIN crypto.CurrencyPairMetric cpm
+    ON ucpm.currencyPairMetricId = cpm.id
+    WHERE ucpm.deletedAt is null
+    AND cpm.market = '{market}'
+    AND cpm.pair = '{pair}'
+    AND cpm.metricTypeId = {metricTypeId}
+    """
+    cursor.execute(check)
+    checkUserMetricData = cursor.fetchall()
+    if len(checkUserMetricData) < 1:
+        pool.release(db)
+        return json.dumps({"code":200, "msg": f"User was not tracking {metric} for {pair} on {market} for this user."}), 200
+    userCurrencyPairMetricId = checkUserMetricData[0]['id']
+    cursor.execute(f"UPDATE crypto.UserCurrencyPairMetric SET deletedAt = now() where id = {userCurrencyPairMetricId}")
+    return json.dumps({"code":200, "msg": f"Successfully ended tracking of {metric} for {pair} on {market} for this user."}), 200
+
 @app.route('/begin-tracking-metric', methods = ['POST'])
 def addTrackingMetric():
     if validateAuthorization(request):
@@ -153,9 +262,10 @@ def addTrackingMetric():
 @app.route('/graphs-of-tracked-metrics/<userId>', methods = ['GET'])
 def getGraphsOfMetrics(userId):
     if validateAuthorization(request):
-        userInDatabase, userHasMetrics, metrics = getMetricsUserIsTracking(userId)
-        results = formatResults(userInDatabase, userHasMetrics, metrics)
-        return results
+        # userInDatabase, userHasMetrics, metrics =
+        return getMetricsUserIsTracking(userId)
+        # results = formatResults(userInDatabase, userHasMetrics, metrics)
+        # return results
     else:
         return json.dumps({"code":400, "msg": "Validation Not Correct"}), 400
 
