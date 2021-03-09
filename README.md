@@ -3,11 +3,23 @@ This Repo is the backend for an application for watching cryptocurrency metrics 
 
 Here is the entity relationship diagram for the MySQL Backend as a reference for the database architecture this application uses: https://drive.google.com/file/d/1_ltuClV3AReFugKyGAiPhEupvrrHWlke/view?usp=sharing
 
-A couple of assumptions I will be making:
+To ease the setup of the MySQL Backend, I included ```databaseSetup.sql``` which can be run within MySQL to set up the tables as well as insert the metrics from cryptowatch that are current as of 3/8/2021.
+
+A couple of assumptions I made:
 - That the User module is created prior to being able to login to system to add cryptocurrency pairs to the metric.
 - Well-behaved inputs for both markets and pairs, as there is no validation on the system right now.
+- Deployment will happen on the Google Cloud Platform (GKE specifically), although it should be cloud agnostic.
 
-It consists of two different critical components to this application.
+Choices I made:
+- The database setup such that it is able to scale and handle many users and metrics, while avoiding redundancy. (IE: User A and User B are tracking the same metric, the system will only query that metric once and share the data).
+- REST API has the singular responsibility of responding to the client's requests as fast as possible via querying the database through a pymysql connection pool, which makes scaling to multiple users easier.
+- The script has the singular responsibility for querying the API to maintain data freshness, clearing (after the time period is up), and to carry out the alerting system.
+- Sampling the data more rapidly would necessitate threading or performance boosts. The environment variable and the CRON scheduler would have to change to reflect the speedup. Currently, the bottleneck is the API request, so hopefully paying for the service would alleviate that in the future.
+- I chose to return all of a user's tracked metrics in one request. This could cause a headache on the frontend of this application as there could be too much data if a user has 400+ metrics, each with 1440 date/float pairs to be graphed.
+- User-Based/Personalized Dashboard System that assumes that the User is already created at the time of the creation of the first metric.
+- Using Sendgrid for the Email alerting system, and I left a couple of TODOs regarding this in the script.
+
+The application consists of two different critical components.
 
 # 1. REST API built in Python using the Flask Framework
 This is the crypto-client-api folder that is to be considered as a separate github repo.
@@ -17,6 +29,7 @@ From the front-end, this is how the client will interact with the backend.
 In order to run it locally, you need to be within a Python 3.7 virtual environment with Flask installed and type in the command line:
 
 ```bash
+pip install -r requirements.txt
 flask run
 ```
 
@@ -57,7 +70,7 @@ If the authorization is correct and that user has tracked metrics, this will ret
 Headers:
 "Authorization": "S3CUR3K3Y"
 
-If the authorization is correct and that user has that metric tracked, then it will remove it from that user's follow list. Otherwise, it will throw an error to be
+If the authorization is correct and that user has that metric tracked, then it will remove it from that user's follow list. Otherwise, it will throw an error that the user or metric are not registered.
 
 # To Do for Production:
 Configure the Gunicorn Flask Python 3.7 application as GKE Service and Ingress.
@@ -71,18 +84,18 @@ SQL_USER=root
 SQL_PASSWORD=PA$$W3RD
 SQL_SCHEMA=crypto
 
-MAX_POOL_SIZE=2
-MIN_POOL_SIZE=1
-AUTHORIZATION_TOKEN=S3CUR3
+MAX_POOL_SIZE= # TO BE DETERMINED AFTER LOAD TESTING
+MIN_POOL_SIZE= # TO BE DETERMINED AFTER LOAD TESTING
+AUTHORIZATION_TOKEN=S3CUR3K3Y
 ```
-
 
 # Improvements
 Implementing a rotating security key system for the api "Authorization" header (Ex: Okta).
 
 Providing a list of the possible markets and pairs of currencies such that the frontend would not have to consult the cryptowatch API by itself for the checkboxes.
 
-Additionally to this, and related, a validation step of the pair with the market would be necessary for production deployment to handle errors.
+In addition to this, and related, a validation step of the pair with the market would be necessary for production deployment to handle errors.
+
 
 # 2. Python Script to upkeep the Data Backend
 This is the cryptowatch-querying folder that is to be considered as a separate github repo.
@@ -91,15 +104,13 @@ The script ```query-cryptowatch.py``` will run on a 1-minute cadence to query th
 
 To do a dry run to pull metrics that are already in the mySQL Database:
 ```bash
-pip install requirements.txt
+pip install -r requirements.txt
 python query-cryptowatch.py
 ```
 
-Here are three added features:
+Here are two added features that are implemented (just need a SENDGRID_API_KEY):
 - An example SendGrid API has been integrated to show how it is possible to send an alert when a metric exceeds 3X the value of its average in the past hour, to notify the user.
-- Catching a KeyError which would use the SendGrid API to ping the responsible engineer notifying that the return value from the cryptowatch API had changed.
 - If the entire script takes more than half of the time window it is supposed to be running at, it will also utilize the SendGrid API to ping the responsible engineer notifying that a throughput improvement is needed.
-
 
 # To Do for Production:
 Configure the Python 3.7 Script as GKE Workload with a crontab scheduler of ```* * * * *```, meaning every minute.
@@ -126,9 +137,11 @@ SENDGRID_API_KEY=$3NDGR1DK3Y          # SENDGRID_API_KEY such that email alerts 
 Continue to monitor the CPU / Memory usage to make sure that more resources are not needed.
 
 # Improvements
-It is always necessary to finish all of the necessary metrics prior to the minute finishing; thus, threading would be needed at scale.
+It is always necessary to finish all of the necessary metrics prior to the minute-cadence finishing; thus, threading would be needed as more metrics are added.
 
-Alerting when the market/pair disappears or when the metric is no longer accessible in the same way that it has been. Within the ```main()```, there are clearly denoted sections for where those improvements belong.
+Two other features to be added:
+- Catching a KeyError which would use the SendGrid API to ping the responsible engineer notifying that the return value from the cryptowatch API had changed.
+- Alerting when the market/pair disappears or when the metric is no longer accessible in the same way that it has been. Within the ```main()```, there are clearly denoted sections for where those improvements belong.
 
-# Additional Clarification
+# Clarification
 Throughout the README, the code, and the architecture it says ```market``` when it really should be ```exchange``` based on the documentation from cryptowatch.
