@@ -15,15 +15,6 @@ CREATE TABLE crypto.`User` (
   `deletedAt` datetime default null
 );
 
-CREATE TABLE crypto.`MetricType` (
-  `id` int auto_increment primary key,
-  `name` varchar(50) not null,
-  `accessKey` varchar(50) not null,
-  `createdAt` datetime not null,
-  `updatedAt` datetime not null,
-  `deletedAt` datetime default null
-);
-
 CREATE TABLE crypto.`MetricValue` (
   `id` int auto_increment primary key,
   `currencyPairMetricId` int not null,
@@ -45,26 +36,37 @@ CREATE TABLE crypto.`UserCurrencyPairMetric` (
   `deletedAt` datetime default null
 );
 
-INSERT INTO crypto.MetricType (name, accessKey, createdAt, updatedAt)
-    VALUES ('price', '["result"]["price"]["last"]', now(), now());
+CREATE TABLE crypto.`MetricType` (
+  `id` int auto_increment primary key,
+  `name` varchar(50) not null,
+  `firstLevel` varchar(50) not null,
+  `secondLevel` varchar(50) default null,
+  `thirdLevel` varchar(50) default null,
+  `createdAt` datetime not null,
+  `updatedAt` datetime not null,
+  `deletedAt` datetime default null
+);
 
-INSERT INTO crypto.MetricType (name, accessKey, createdAt, updatedAt)
-    VALUES ('highPriceLast24Hrs','["result"]["price"]["high"]', now(), now());
+INSERT INTO crypto.MetricType (name, firstLevel, secondLevel, createdAt, updatedAt)
+    VALUES ('price', 'price', 'last', now(), now());
 
-INSERT INTO crypto.MetricType (name, accessKey, createdAt, updatedAt)
-    VALUES ('lowPriceLast24Hrs','["result"]["price"]["low"]', now(), now());
+INSERT INTO crypto.MetricType (name, firstLevel, secondLevel, createdAt, updatedAt)
+    VALUES ('highPriceLast24Hrs', 'price', 'high', now(), now());
 
-INSERT INTO crypto.MetricType (name, accessKey, createdAt, updatedAt)
-    VALUES ('percentChange','["result"]["price"]["change"]["percentage"]', now(), now());
+INSERT INTO crypto.MetricType (name, firstLevel, secondLevel, createdAt, updatedAt)
+    VALUES ('lowPriceLast24Hrs', 'price', 'low', now(), now());
 
-INSERT INTO crypto.MetricType (name, accessKey, createdAt, updatedAt)
-    VALUES ('absoluteChange','["result"]["price"]["change"]["absolute"]', now(), now());
+INSERT INTO crypto.MetricType (name, firstLevel, secondLevel, thirdLevel, createdAt, updatedAt)
+    VALUES ('percentChange','price','change','percentage', now(), now());
 
-INSERT INTO crypto.MetricType (name, accessKey, createdAt, updatedAt)
-    VALUES ('volume','["result"]["volume"]', now(), now());
+INSERT INTO crypto.MetricType (name, firstLevel, secondLevel, thirdLevel, createdAt, updatedAt)
+    VALUES ('absoluteChange','price','change','absolute', now(), now());
 
-INSERT INTO crypto.MetricType (name, accessKey, createdAt, updatedAt)
-    VALUES ('quoteVolume','["result"]["volumeQuote"]', now(), now());
+INSERT INTO crypto.MetricType (name, firstLevel, createdAt, updatedAt)
+    VALUES ('volume', 'volume', now(), now());
+
+INSERT INTO crypto.MetricType (name, firstLevel, createdAt, updatedAt)
+    VALUES ('quoteVolume','volumeQuote', now(), now());
 
 INSERT INTO `crypto`.`User` (`firstName`, `lastName`, `email`, `createdAt`, `updatedAt`)
     VALUES ('Donny', 'Flynn', 'donny@pivasc.com', now(), now());
