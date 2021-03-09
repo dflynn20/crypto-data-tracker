@@ -200,8 +200,8 @@ def getMetricsUserIsTracking(userId):
     JOIN crypto.MetricType mt on cpm.metricTypeId = mt.id
     WHERE cpm.id IN
     (
-    SELECT DISTINCT currencyPairMetricId
-    FROM UserCurrencyPairMetric
+    SELECT DISTINCT ucpm.currencyPairMetricId
+    FROM UserCurrencyPairMetric ucpm
     WHERE ucpm.deletedAt is null AND ucpm.userId = {userId}
     )
     """
