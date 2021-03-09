@@ -136,7 +136,8 @@ def main():
 
     # Gets all of the active metrics from the database that need to be tracked.
     getActiveMetricsQuery = """
-        SELECT cpm.id, cpm.pair, cpm.market, mt.accessKey
+        SELECT cpm.id, cpm.pair, cpm.market,
+        mt.firstLevel, mt.secondLevel, mt.thirdLevel
         FROM crypto.CurrencyPairMetric cpm
         JOIN crypto.MetricType mt on cpm.metricTypeId = mt.id
         WHERE cpm.id IN
@@ -153,7 +154,7 @@ def main():
 
     for row in currentMetrics:
         start_time_run_i = time.time()
-        cpmId, pair, market, accessKey = row[0], row[1], row[2], row[3]
+        cpmId, pair, market, firstLevel, secondLevel, thirdLevel = row[0], row[1], row[2], row[3], row[4], row[5]
 
         # This is the query that takes the longest within this process. An improvement would be to thread
         # the different requests. It also might just be solved if the cryptowatch API is pinged from a
@@ -165,9 +166,12 @@ def main():
 
         data = result.json()
 
-
-        # AccessKey needs to be changed here, need to figure out that structure...
-        value = data["result"]["volume"]
+        if secondLevel == None:
+            value = data["result"][firstLevel]
+        elif thirdLevel == None:
+            value = data["result"][firstLevel][secondLevel]
+        else:
+            value = data["result"][firstLevel][secondLevel][thirdLevel]
 
 
         # IMPROVEMENT HERE: Wrapping the read of the specific metric to catch possible KeyError's,
@@ -197,7 +201,6 @@ def main():
 
     db.close()
     print(f"--- Closed DB, Done --- {round(time.time() - start_time, 4)} seconds ---")
-
 
 
 main()
