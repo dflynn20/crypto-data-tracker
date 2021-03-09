@@ -39,13 +39,13 @@ pool = Pool(host=SQL_IP, user=SQL_USER, password=SQL_PASSWORD, db=SQL_SCHEMA, au
 pool.init()
 print("Pool initialized")
 
-
+# This returns the necessary objects to operate with the mySQL Pool.
 def connectToMySQL():
     connection = pool.get_conn()
     cursor = connection.cursor()
     return connection, cursor, pool
 
-# To be used for Debugging during coding, not sure what it will eventually look like....
+# To be used for Debugging. Need to view the logs to see what happened.
 @app.errorhandler(Exception)
 def handleException(e):
     print(e)
@@ -58,6 +58,7 @@ def validate_token():
     else:
         return json.dumps({"code":400, "msg": "Validation Not Correct"}), 400
 
+# Error handler that will return the proper error message as well as release the db from the pool.
 def returnErrorReleaseSQL(pool, db, errorMessage):
     pool.release(db)
     return json.dumps({"code":400, "msg": errorMessage}), 400
@@ -142,13 +143,14 @@ def addToDataBaseForTracking(userId, market, pair, metric):
 def getRank(cursor, currencyPairMetricId, metricTypeId, market):
     rankNum, rankDenom = 0, 0
     rankQuery = f"""
-    SELECT std(mv.value), mv.id FROM
+    SELECT stddev(mv.value), cpm.id FROM
     crypto.MetricValue mv JOIN
     crypto.CurrencyPairMetric cpm
     ON mv.currencyPairMetricId = cpm.id
     WHERE cpm.metricTypeId = {metricTypeId}
     AND cpm.market = '{market}'
-    GROUP BY 1 DESC
+    GROUP BY 2
+    ORDER BY 1 DESC
     """
     cursor.execute(rankQuery)
     rankData = cursor.fetchall()
@@ -166,12 +168,13 @@ def getRank(cursor, currencyPairMetricId, metricTypeId, market):
 # "times": X Array of the times that the metric was taken
 # "values": Y Array of the value of that metric at the corresponding times
 # such that the frontend can graph this data.
-def getGraphData(cursor, allUserCurrencyPairMetrics, indexDict):
+def getAllUserGraphData(cursor, allUserCurrencyPairMetrics, indexDict):
+    # Special handling when there is only one metric vs multiple.
+    whereString = f" in {tuple(allUserCurrencyPairMetrics)} " if len(allUserCurrencyPairMetrics) > 1 else f" = {allUserCurrencyPairMetrics[0]} "
     graphQuery = f"""
     SELECT queriedAt, value, currencyPairMetricId
     FROM crypto.MetricValue
-    WHERE currencyPairMetricId in
-    {tuple(allUserCurrencyPairMetrics)}
+    WHERE currencyPairMetricId {whereString}
     ORDER BY 3, 1 ASC
     """
     cursor.execute(graphQuery)
@@ -187,12 +190,11 @@ def getGraphData(cursor, allUserCurrencyPairMetrics, indexDict):
         prevId = currId
         xAr.append(row['queriedAt'])
         yAr.append(row['value'])
-    # Still have to add the last one as the trigger condition would not have gone
+    # Still have to add the last one as the trigger condition would not have been hit yet
     resultsDict[indexDict[prevId]] = {'times': xAr, 'values': yAr}
     return resultsDict
 
 def getMetricsUserIsTracking(userId):
-    error = False
     db, cursor, pool = connectToMySQL()
     getMetrics = f"""
     SELECT cpm.*, mt.name as metricName
@@ -219,25 +221,18 @@ def getMetricsUserIsTracking(userId):
                         'rankNum': rankNum, 'rankDenom': rankDenom, 'times': [], 'values': []}
             allMetricData.append(rowDict)
             index += 1
-        # graphDataDict = {allMetricData_index : {"times": [queriedAt], "values": [value]}}
         graphDataDict = getAllUserGraphData(cursor, allUserCurrencyPairMetrics, indexDict)
         for k, v in graphDataDict.items():
             allMetricData[k]['times'] = v['times']
             allMetricData[k]['values'] = v['values']
-
-    except:
-        print(f"Error occurred {len(allMetricData)} / {len(metricData)} of the way through the loop.")
-        error = True
-        pass
-    finally:
         pool.release(db)
-        if error:
-            json.dumps({"code":200, "successfullyFinished": False, "data": allMetricData}), 200
-        return json.dumps({"code":200, "successfullyFinished": True, "data": allMetricData}), 200
+        return json.dumps({"code":200, "successfullyFinished": True, "data": allMetricData}, default = str), 200
+    except:
+        pool.release(db)
+        print(f"Error occurred {len(allMetricData)} / {len(metricData)} of the way through the loop.")
+        return json.dumps({"code":200, "successfullyFinished": False, "data": allMetricData}, default = str), 200
 
 # Properly handles when the User is not in the database as well as when the metric is not valid.
-# The query-cryptowatch script that queries will upkeep this by default if there is an API-side deletion of the metric,
-# it will automatically delete it from being tracked for all users.
 def safeRemoveFromDatabase(userId, market, pair, metric):
     db, cursor, pool = connectToMySQL()
     userValidatingQuery = f"SELECT id FROM crypto.User WHERE deletedAt is null AND id = {userId};"
@@ -268,6 +263,7 @@ def safeRemoveFromDatabase(userId, market, pair, metric):
     cursor.execute(f"UPDATE crypto.UserCurrencyPairMetric SET deletedAt = now() where id = {userCurrencyPairMetricId}")
     return json.dumps({"code":200, "msg": f"Successfully ended tracking of {metric} for {pair} on {market} for this user."}), 200
 
+# This function adds the
 @app.route('/begin-tracking-metric', methods = ['POST'])
 def addTrackingMetric():
     if validateAuthorization(request):
@@ -280,16 +276,30 @@ def addTrackingMetric():
     else:
         return json.dumps({"code":400, "msg": "Validation Not Correct"}), 400
 
+
+# Takes in a userId and returns all of that users tracked metrics in a json object of
+# the format:
+#   {
+#     successfullyFinished: true,
+#     data: [{'pair': pairName, 'market': marketName, 'metric': metricName,
+#             'rankNum': rankNumerator, 'rankDenom': rankDenominator,
+#             'times': [], (AN ARRAY OF STRINGS, NEEDS TO BE CONVERTED ON FRONTEND TO GRAPH)
+#              'values': []    (AN ARRAY OF floats) }, ...
+#           ]
+#   }
+# IMPROVEMENT: Right now, if there is a user that is tracking many different metrics,
+# this function will return all of 1440 pairs for each one of the users' metrics which might
+# overload the cache for the frontend at scale.
 @app.route('/graphs-of-tracked-metrics/<userId>', methods = ['GET'])
 def getGraphsOfMetrics(userId):
     if validateAuthorization(request):
-        # userInDatabase, userHasMetrics, metrics =
         return getMetricsUserIsTracking(userId)
-        # results = formatResults(userInDatabase, userHasMetrics, metrics)
-        # return results
     else:
         return json.dumps({"code":400, "msg": "Validation Not Correct"}), 400
 
+
+# Takes in the path of a userId, market, pair, metric name and removes it from that
+# users' tracked list.
 @app.route('/remove/<userId>/<market>/<pair>/<metric>', methods = ['DELETE'])
 def removeUserMetric(userId, market, pair, metric):
     if validateAuthorization(request):
@@ -297,6 +307,8 @@ def removeUserMetric(userId, market, pair, metric):
     else:
         return json.dumps({"code":400, "msg": "Validation Not Correct"}), 400
 
+
+# Provides a HealthCheck route to make sure that the REST API is functioning correctly.
 @app.route('/hc')
 def healthcheck():
     return health.run()
