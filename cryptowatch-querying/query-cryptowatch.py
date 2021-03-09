@@ -182,7 +182,7 @@ def main():
         insertionQuery = f"""
             INSERT INTO crypto.MetricValue (currencyPairMetricId, value, queriedAt)
             VALUES ({cpmId}, {value},
-            '{pd.to_datetime(pd.Timestamp.today().replace(microsecond=0).replace(second=0))}');
+            '{pd.to_datetime(pd.Timestamp.today().replace(microsecond=0))}');
         """
         cursor.execute(insertionQuery)
         print(f"--- Fetched One Value and Checked Alert --- {round(time.time() - start_time_run_i,4)} seconds ---")
