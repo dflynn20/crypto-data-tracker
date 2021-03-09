@@ -10,8 +10,9 @@ A couple of assumptions I made:
 - Well-behaved inputs for both markets and pairs, as there is no validation on the system right now.
 - Deployment will happen on the Google Cloud Platform (GKE specifically), although it should be cloud agnostic.
 
-Choices I made:
+Choices I made, and why:
 - The database setup such that it is able to scale and handle many users and metrics, while avoiding redundancy. (IE: User A and User B are tracking the same metric, the system will only query that metric once and share the data).
+- Keeping the break table with a softdelete (UserCurrencyPairMetric) creates a way to keep track of which metrics/markets users are tracking and have been historically. It would be like a trending list for Twitter, and it might present an opportunity (with enough critical mass), to export an API for what crypto metrics are being tracked. This would be especially valuable if there were professional crypto-traders that would actively upkeep/maintain their watchlists.
 - REST API has the singular responsibility of responding to the client's requests as fast as possible via querying the database through a pymysql connection pool, which makes scaling to multiple users easier.
 - The script has the singular responsibility for querying the API to maintain data freshness, clearing (after the time period is up), and to carry out the alerting system.
 - Sampling the data more rapidly would necessitate threading or performance boosts. The environment variable and the CRON scheduler would have to change to reflect the speedup. Currently, the bottleneck is the API request, so hopefully paying for the service would alleviate that in the future.
@@ -133,6 +134,7 @@ FACTOR_METRIC_THRESH_ALERT=3          # Initial Feature Request, is robust to ch
 BACKEND_THRESHOLD=0.5                 # Alerting when the code is beginning to be slower to monitor possible threading
 BACKEND_EMAIL=gilfoyle@piedpiper.net  # Star Backend Engineer to be Notified in case of issues
 SENDGRID_API_KEY=$3NDGR1DK3Y          # SENDGRID_API_KEY such that email alerts can be sent
+FACTOR_DATA_FRESHNESS_THRESHOLD=4     # How many periods is it okay for us to miss consecutively when loading data
 ```
 Continue to monitor the CPU / Memory usage to make sure that more resources are not needed.
 
@@ -142,6 +144,9 @@ It is always necessary to finish all of the necessary metrics prior to the minut
 Two other features to be added:
 - Catching a KeyError which would use the SendGrid API to ping the responsible engineer notifying that the return value from the cryptowatch API had changed.
 - Alerting when the market/pair disappears or when the metric is no longer accessible in the same way that it has been. Within the ```main()```, there are clearly denoted sections for where those improvements belong.
+
+# Testing
+Beyond the tests that I implemented by running all of the functions as well as the script, the most ideal way to test this would be to establish, with a paid account for cryptowatch, 2400 different metrics across 100 different users within a beta environment. Having the rate email properly configured, we can see when/if we would need to boost throughput on the script side. Also, we can use the simple canary task of running ```canary.py``` every 20 minutes to make sure that there are new values coming in and being stored properly within the database, but to not exhaust the data engineers with many consecutive emails as they could be possibly solving the problem. This is a basic test for ensuring pipeline functionality with the API, but we could implement other test such as checking specific values of a metric to ensure that nothing is off by a factor of 50+ from the norm (even for cryptocurrency pairs, that would seem highly irregular, and more likely would be a signal of dirty data). 
 
 # Clarification
 Throughout the README, the code, and the architecture it says ```market``` when it really should be ```exchange``` based on the documentation from cryptowatch.
